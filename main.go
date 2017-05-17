@@ -3,13 +3,15 @@ package main
 import (
 	"fmt"
 	"math"
+	"math/rand"
 	"time"
 
+	"github.com/lnsp/pdi-carsim/geometry"
 	"github.com/veandco/go-sdl2/sdl"
 )
 
 const (
-	windowWidth, windowHeight = 1280, 800
+	windowWidth, windowHeight = 1200, 800
 )
 
 func main() {
@@ -18,161 +20,109 @@ func main() {
 	}
 }
 
-var Null Vector = Vector{0, 0}
-
-type Vector struct {
-	X, Y float64
-}
-
-func (v Vector) Add(a Vector) Vector {
-	return Vector{v.X + a.X, v.Y + a.Y}
-}
-
-func (v Vector) AddX(a Vector) Vector {
-	return Vector{v.X + a.X, v.Y}
-}
-
-func (v Vector) AddY(a Vector) Vector {
-	return Vector{v.X, v.Y + a.Y}
-}
-
-func (v Vector) Scale(s float64) Vector {
-	return Vector{s * v.X, s * v.Y}
-}
-
-func (v Vector) Norm() Vector {
-	len := v.Len()
-	if len != 0.0 {
-		return v.Scale(1.0 / len)
-	}
-	return v
-}
-
-func (v Vector) Len() float64 {
-	return math.Sqrt(v.X*v.X + v.Y*v.Y)
-}
-
-func (v Vector) ToPoint() sdl.Point {
-	return sdl.Point{X: int32(v.X), Y: int32(v.Y)}
-}
-
-func (v Vector) Dot(a Vector) float64 {
-	return v.X*a.X + v.Y*a.Y
-}
-
-func (v Vector) Det(a Vector) float64 {
-	return v.X*a.Y - v.Y*a.X
-}
-
-func (v Vector) AngleBetween(a Vector) float64 {
-	return math.Atan2(v.Det(a), v.Dot(a))
-}
-
-func (v Vector) RotateAround(a Vector, angle float64) Vector {
-	return Vector{
-		X: ((v.X - a.X) * math.Cos(angle)) + ((a.Y - v.Y) * math.Sin(angle)) + a.X,
-		Y: ((a.Y - v.Y) * math.Cos(angle)) - ((v.X - a.X) * math.Sin(angle)) + a.Y,
-	}
-}
-
-type Polygon []Vector
-
-func NewPolygon(components ...Vector) Polygon {
-	return Polygon(components)
-}
-
-func (p Polygon) Center() Vector {
-	len := float64(len(p))
-	if len == 0.0 {
-		return Vector{}
-	}
-	r := Vector{}
-	for _, c := range p {
-		r = r.Add(c)
-	}
-	return r.Scale(1.0 / len)
-}
-
-func (p Polygon) Translate(v Vector) Polygon {
-	components := make([]Vector, len(p))
-	for i := range components {
-		components[i] = p[i].Add(v)
-	}
-	return Polygon(components)
-}
-
-func (p Polygon) RotateAround(v Vector, angle float64) Polygon {
-	components := make([]Vector, len(p))
-	for i := range components {
-		components[i] = p[i].RotateAround(v, angle)
-	}
-	return Polygon(components)
-}
-
-func (p Polygon) Points() []sdl.Point {
-	points := make([]sdl.Point, len(p))
-	for i := range points {
-		points[i] = p[i].ToPoint()
-	}
-	if len(points) != 0 {
-		points = append(points, points[0])
-	}
-	return points
-}
-
+// CarModel is an abstract physics model of a car.
 type CarModel struct {
-	Size, Position, Velocity, Acceleration Vector
-	Bounds                                 Polygon
-	Mass, WheelAngle                       float64
+	Size, Position, Velocity, Acceleration geometry.Vector
+	Bounds                                 geometry.Polygon
+	Mass, Rotation, Tension, Sensitivity   float64
 }
 
-func (c *CarModel) ApplyForce(f Vector) {
-	c.Acceleration = c.Acceleration.Add(f.Scale(1.0 / c.Mass))
+// ApplyForce applies a force to the car.
+func (car *CarModel) ApplyForce(f geometry.Vector) {
+	car.Acceleration = car.Acceleration.Add(f.Scale(1.0 / car.Mass))
 }
 
-func (c *CarModel) Accelerate(delta float64) {
-	c.ApplyForce(Vector{1, 0}.Scale(delta))
+// Accelerate accelerates the car by the specified factor.
+func (car *CarModel) Accelerate(delta float64) {
+	car.ApplyForce(geometry.X.Scale(delta))
 }
 
-func (c *CarModel) Break(delta float64) {
-	c.ApplyForce(Vector{-1, 0}.Scale(delta))
+// Break stops the cars movement.
+func (car *CarModel) Break(delta float64) {
+	car.Acceleration = car.Acceleration.Scale(car.Tension / car.Sensitivity)
+	car.Velocity = car.Velocity.Scale(car.Tension)
 }
 
-func (c *CarModel) TurnLeft(delta float64) {
-	c.WheelAngle += delta
-	fmt.Println(c.WheelAngle)
+// Turn turns the wheel
+func (car *CarModel) Turn(delta float64) {
+	car.Rotation += delta * car.Sensitivity
 }
 
-func (c *CarModel) TurnRight(delta float64) {
-	c.WheelAngle -= delta
-	fmt.Println(c.WheelAngle)
-}
-
-func NewCar(mass, x, y float64) *CarModel {
-	c := &CarModel{
-		Size:         Vector{50, 100},
-		Position:     Vector{100, 100},
-		Velocity:     Vector{0, 0},
-		Acceleration: Vector{0, 0},
+// NewCar initializes a new car model.
+func NewCar(mass, x, y, width, height float64) *CarModel {
+	car := &CarModel{
+		Size:         geometry.Vector{X: width, Y: height},
+		Position:     geometry.Vector{X: x, Y: y},
+		Velocity:     geometry.NullVector,
+		Acceleration: geometry.NullVector,
 		Mass:         mass,
-		WheelAngle:   0,
+		Rotation:     0,
+		Tension:      0.9999,
+		Sensitivity:  50.,
 	}
-	c.Bounds = NewPolygon(Null, Null.AddX(c.Size), Null.Add(c.Size), Null.AddY(c.Size))
-	return c
+	car.Bounds = geometry.NewPolygon(geometry.NullVector, geometry.NullVector.AddX(car.Size), car.Size, geometry.NullVector.AddY(car.Size))
+	return car
 }
 
-func (c *CarModel) Update(delta float64) {
-	c.Acceleration = c.Acceleration.Scale(0.99)
-	c.Velocity = c.Velocity.Scale(0.99).Add(c.Acceleration.Scale(delta))
-	c.Position = c.Position.Add(c.Velocity.Scale(delta).RotateAround(Null, c.WheelAngle))
+func (car *CarModel) TurnCenter() geometry.Vector {
+	return car.Bounds.Translate(geometry.Null.AddX(car.Size.Scale(-0.2))).Center()
 }
 
-func (c *CarModel) Draw(r *sdl.Renderer) {
-	center, angle := c.Bounds.Center(), c.Velocity.RotateAround(Null, c.WheelAngle).AngleBetween(Vector{0, 1})
-	//fmt.Println(center, angle)
-	transformed := c.Bounds.RotateAround(center, angle).Translate(c.Position)
-	//fmt.Println(transformed)
-	r.DrawLines(transformed.Points())
+// Update updates the car model.
+func (car *CarModel) Update(delta float64) {
+	car.Acceleration = car.Acceleration.Scale(car.Tension)
+	car.Velocity = car.Velocity.Add(car.Acceleration.Scale(delta))
+	car.Position = car.Position.Add(car.Velocity.Scale(delta).RotateAround(geometry.Null, car.Rotation))
+}
+
+// Draw renders the model onto the screen.
+func (car *CarModel) Draw(r *sdl.Renderer) {
+	// Rotated = Model.RotateAround(Center, Rotation)
+	// Translated = Rotated.Translate(Car.Position)
+	vertices := car.Bounds.RotateAround(car.TurnCenter(), car.Rotation).Translate(car.Position).Points()
+	r.DrawLines(vertices)
+}
+
+type CarController interface {
+	Feed(float64, geometry.Vector)
+}
+
+type SimpleCarControl struct {
+	*CarModel
+}
+
+func (ctrl *SimpleCarControl) Feed(delta float64, p geometry.Vector) {
+	diffVector := p.Add(ctrl.Position.Add(ctrl.TurnCenter()).Scale(-1))
+	diffAngle := diffVector.AngleBetween(ctrl.Velocity.Norm().RotateAround(geometry.Null, ctrl.Rotation))
+	fmt.Println(diffAngle)
+
+	if diffAngle > 0 {
+		ctrl.Turn(delta)
+	} else if diffAngle < 0 {
+		ctrl.Turn(-delta)
+	}
+
+	br := (-diffVector.Len() + 100)
+	of := math.Log(diffVector.Len()-30) / 10
+
+	if of > 0 {
+		ctrl.Accelerate(0.1)
+	}
+	if br > 0 {
+		ctrl.Break(br)
+	}
+}
+
+func generateRandomPath(c int, x, y, width, height float64) geometry.Polygon {
+	rand.Seed(time.Now().Unix())
+	vertices := make([]geometry.Vector, c)
+	for i := range vertices {
+		vertices[i] = geometry.Vector{
+			X: rand.Float64()*width + x,
+			Y: rand.Float64()*height + y,
+		}
+	}
+	return geometry.NewPolygon(vertices...)
 }
 
 func run() error {
@@ -187,18 +137,42 @@ func run() error {
 	defer window.Destroy()
 	defer renderer.Destroy()
 
-	car := NewCar(1, 100, 100)
-	last := time.Now().UnixNano()
+	targetPath := generateRandomPath(8, 100, 100, 1000, 600)
+	car := NewCar(1, 100, 100, 100, 50)
+	path := []sdl.Point{car.TurnCenter().ToPoint()}
+	lastFrame, lastPathUpdate := time.Now(), time.Now()
+	ctrl := SimpleCarControl{car}
+
+	progress := 2.0
+	ownControl := false
 	for {
 		renderer.SetDrawColor(0, 0, 0, 255)
 		renderer.Clear()
+		renderer.SetDrawColor(0, 0, 255, 255)
+		renderer.DrawLines(targetPath.Points())
+		renderer.SetDrawColor(0, 255, 0, 255)
+		renderer.DrawLines(path)
 		renderer.SetDrawColor(255, 0, 0, 255)
 		car.Draw(renderer)
 
-		delta := float64(time.Now().UnixNano()-last) / float64(time.Second)
+		delta := float64(time.Since(lastFrame)) / float64(time.Second)
 		car.Update(delta)
-		last = time.Now().UnixNano()
-		//delta2 := float64(time.Now().UnixNano()-last) / float64(time.Second)
+		lastFrame = time.Now()
+
+		if time.Since(lastPathUpdate) > time.Second/10 {
+			path = append(path, car.Position.Add(car.TurnCenter()).ToPoint())
+			lastPathUpdate = time.Now()
+		}
+
+		progress += delta / 60
+		if progress > 1.0 {
+			targetPath = generateRandomPath(8, 100, 100, 1000, 600)
+			progress = 0.0
+			car.Position = targetPath.Interpolate(0.0).Add(car.TurnCenter().Scale(-1))
+			path = []sdl.Point{car.Position.ToPoint()}
+		}
+		interpol := targetPath.Interpolate(progress).ToPoint()
+		renderer.DrawPoints([]sdl.Point{interpol})
 
 		for event := sdl.PollEvent(); event != nil; event = sdl.PollEvent() {
 			switch et := event.(type) {
@@ -207,17 +181,22 @@ func run() error {
 				case sdl.K_ESCAPE:
 					return nil
 				case sdl.K_w:
-					car.Accelerate(100.0)
+					car.Accelerate(10.0)
 				case sdl.K_s:
-					car.Break(100.0)
+					car.Break(10.0)
 				case sdl.K_a:
-					car.TurnLeft(delta)
+					car.Turn(math.Pi * 4 * delta)
 				case sdl.K_d:
-					car.TurnRight(delta)
+					car.Turn(-math.Pi * 4 * delta)
+				case sdl.K_o:
+					ownControl = !ownControl
 				}
 			}
 		}
+		if !ownControl {
+			ctrl.Feed(delta, targetPath.Interpolate(progress))
+		}
+
 		renderer.Present()
-		sdl.Delay(1)
 	}
 }
